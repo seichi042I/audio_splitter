@@ -12,10 +12,21 @@ pub fn resample_wav(input_path: &Path, output_path: &Path, output_sample_rate: f
     let input_sample_rate = spec.sample_rate as f64;
 
     // サンプルデータを読み込む
-    let samples: Vec<f64> = if spec.sample_format == hound::SampleFormat::Float {
-        reader.samples::<f32>().map(|s| s.unwrap() as f64).collect()
-    } else {
-        reader.samples::<i16>().map(|s| s.unwrap() as f64 / 32768.0).collect()
+    let samples: Vec<f64> = match spec.sample_format {
+        hound::SampleFormat::Float => {
+            reader.samples::<f32>().map(|s| s.unwrap() as f64).collect()
+        },
+        hound::SampleFormat::Int => match spec.bits_per_sample {
+            16 => {
+                reader.samples::<i16>().map(|s| s.unwrap() as f64 / 32768.0).collect()
+            },
+            24 => {
+                reader.samples::<i32>().map(|s| {
+                    s.unwrap() as f64 / 8388608.0 // 24-bit normalization
+                }).collect()
+            },
+            _ => panic!("Unsupported bit depth"),
+        },
     };
 
     // チャンネルごとにデータを分割

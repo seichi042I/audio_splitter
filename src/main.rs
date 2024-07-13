@@ -1,6 +1,6 @@
 use hound::{Sample, SampleFormat, WavReader, WavSpec};
 use resampler::resample_wav;
-use utils::{Normalizable, calculate_rms_db, save_part};
+use utils::{Normalizable, calculate_rms_db, save_part,setup_progress_bar};
 mod resampler;
 mod utils;
 use std::any::type_name;
@@ -26,7 +26,7 @@ struct Opt {
     #[structopt(long="min-silence-duration", default_value = "500")]
     min_silence_duration: u64,
 
-    #[structopt(long="min-sound-duration", default_value = "333")]
+    #[structopt(long="min-sound-duration", default_value = "500")]
     min_sound_duration: u64,
 
     /// Chunk size in milliseconds
@@ -34,7 +34,7 @@ struct Opt {
     chunk_length: u64,
 
     /// Threshold in dB
-    #[structopt(short="t",long="threshold", default_value = "-40")]
+    #[structopt(short="t",long="threshold", default_value = "-80",parse(try_from_str))]
     threshold: i32,
 }
 
@@ -83,6 +83,12 @@ fn process_samples<T: Normalizable + Sample + Debug + Copy>(
     if !outdir_original.exists() {
         fs::create_dir_all(&outdir_original)?;
     }
+
+    writeln!(log_file, "make tmp file");
+
+    // プログレスバーを表示
+    let total_samples = reader.len();  // 総サンプル数を取得
+    let pb = setup_progress_bar(total_samples as u64);
     
     for sample_result in reader.samples::<T>() {
         let sample = sample_result.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -110,6 +116,8 @@ fn process_samples<T: Normalizable + Sample + Debug + Copy>(
                         }
                         // 16kHzにリサンプリングしたものを出力
                         let _ = resample_wav(Path::new(&outpath_original), Path::new(&outpath_16kHz), 16000.0);
+
+                        pb.inc(audio_buffer.len() as u64);  // プログレスバーをchunk_size分だけ進める
 
                         part_index += 1;
                         audio_buffer.clear();
@@ -164,6 +172,13 @@ fn main() -> Result<(), Error> {
 
     match spec.sample_format {
         SampleFormat::Float => process_samples::<f32>(&mut reader, &spec, &opt),
-        SampleFormat::Int => process_samples::<i16>(&mut reader, &spec, &opt),
+        SampleFormat::Int => {
+            match spec.bits_per_sample {
+                16 => process_samples::<i16>(&mut reader, &spec, &opt),
+                24 => process_samples::<i32>(&mut reader, &spec, &opt), // Handling 24-bit as i32
+                _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "Unsupported bit depth")),
+            }
+        }
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "Unsupported sample format")),
     }
 }
